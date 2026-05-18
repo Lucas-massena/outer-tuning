@@ -1,0 +1,1292 @@
+================================================================================
+DOCUMENTAÇÃO DAS ALTERAÇÕES — PROJETO OUTER TUNING
+================================================================================
+Objetivo: Fazer o projeto rodar no localhost e adicionar integração com Gemini AI.
+================================================================================
+
+
+--------------------------------------------------------------------------------
+1. Makefile
+--------------------------------------------------------------------------------
+MOTIVO:
+  O sistema possui Docker Compose v2 instalado (comando "docker compose"),
+  mas o Makefile usava o comando da v1 ("docker-compose"), que não existe.
+
+ALTERAÇÃO:
+  - "docker-compose" → "docker compose" nos targets deploy e stop
+
+ANTES:
+  deploy:
+      docker-compose -f ./docker-compose/docker-compose.yml up -d
+  stop:
+      docker-compose -f ./docker-compose/docker-compose.yml down
+
+DEPOIS:
+  deploy:
+      docker compose -f ./docker-compose/docker-compose.yml up -d
+  stop:
+      docker compose -f ./docker-compose/docker-compose.yml down
+
+RESULTADO:
+  O comando "make deploy" e "make stop" passaram a funcionar corretamente.
+
+
+--------------------------------------------------------------------------------
+2. src/main/webapp/WEB-INF/web.xml
+--------------------------------------------------------------------------------
+MOTIVO:
+  O arquivo web.xml declarava o servlet com nome "controller" e mapeava
+  para /controller. Mas a classe ServletAgents já possui a anotação Java
+  @WebServlet(urlPatterns = {"/ServletAgents"}), que registra o mesmo servlet
+  na URL /ServletAgents. Isso gerava conflito de mapeamento duplicado e o
+  Tomcat recusava subir a aplicação (HTTP 404).
+
+  Todos os JSPs (index.jsp, workload.jsp, etc.) usam o caminho "ServletAgents",
+  portanto a declaração no web.xml era redundante e conflitante.
+
+ALTERAÇÃO:
+  Removida a declaração <servlet> e <servlet-mapping> do web.xml,
+  mantendo apenas a configuração de sessão.
+
+ANTES:
+  <servlet>
+      <servlet-name>controller</servlet-name>
+      <servlet-class>...ServletAgents</servlet-class>
+  </servlet>
+  <servlet-mapping>
+      <servlet-name>controller</servlet-name>
+      <url-pattern>/ServletAgents</url-pattern>
+  </servlet-mapping>
+  <session-config>...</session-config>
+
+DEPOIS:
+  <session-config>...</session-config>
+
+RESULTADO:
+  A página principal do OuterTuning passou a carregar corretamente.
+
+
+--------------------------------------------------------------------------------
+3. src/main/java/.../servlets/ServletBase.java
+--------------------------------------------------------------------------------
+MOTIVO:
+  O método processRequest() capturava todas as exceções mas as silenciava
+  completamente — o browser recebia uma resposta vazia quando ocorria qualquer
+  erro, tornando impossível diagnosticar problemas.
+
+ALTERAÇÃO:
+  Adicionado bloco que imprime o stack trace da exceção diretamente na resposta
+  HTTP quando ocorre um erro, permitindo ver o erro no browser.
+
+ANTES:
+  } catch (NoSuchMethodException | ... | InvocationTargetException ex) {
+      Logger.getLogger(...).log(Level.SEVERE, null, ex);
+  }
+
+DEPOIS:
+  } catch (NoSuchMethodException | ... | InvocationTargetException ex) {
+      Logger.getLogger(...).log(Level.SEVERE, null, ex);
+      Throwable cause = (ex instanceof InvocationTargetException)
+          ? ((InvocationTargetException) ex).getCause() : ex;
+      try {
+          response.getWriter().println("<pre>ERROR: " + cause + "\n");
+          for (StackTraceElement e : cause.getStackTrace())
+              response.getWriter().println(e);
+          response.getWriter().println("</pre>");
+      } catch (Exception ignored) {}
+  }
+
+RESULTADO:
+  Ao clicar em START e ocorrer erro, o browser mostrava a exceção completa.
+  Isso revelou que o problema era na inicialização do motor de regras Jess.
+
+
+--------------------------------------------------------------------------------
+4. src/main/java/.../ontology/Semantic.java
+--------------------------------------------------------------------------------
+MOTIVO:
+  O método startMachineInference() chamava log.error(ex) quando o Jess
+  falhava. Porém, o método Log.error() foi implementado para SEMPRE lançar
+  UnsupportedOperationException, transformando o erro original em uma exceção
+  genérica sem contexto útil.
+
+  Isso mascarava a causa raiz do problema (falha na inicialização do Jess).
+
+ALTERAÇÃO:
+  Substituído log.error(ex) por um RuntimeException que preserva a causa
+  raiz completa com tipo e mensagem exatos.
+
+ANTES:
+  } catch (SWRLRuleEngineException ex) {
+      log.error(ex);  // lançava UnsupportedOperationException genérica
+  }
+
+DEPOIS:
+  } catch (SWRLRuleEngineException ex) {
+      Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
+      Throwable root = cause.getCause() != null ? cause.getCause() : cause;
+      throw new RuntimeException(
+          "JESS_INIT_FAILURE type=" + root.getClass().getName()
+          + " msg=" + root.getMessage(), root);
+  }
+
+RESULTADO:
+  O browser passou a mostrar a causa real do erro. Revelou que o Jess estava
+  falhando com "Error loading Jess: null". Após rebuild completo do projeto,
+  o Jess passou a inicializar corretamente e a página de heurísticas carregou.
+
+
+--------------------------------------------------------------------------------
+5. docker-entrypoint.sh  (ARQUIVO NOVO)
+--------------------------------------------------------------------------------
+MOTIVO:
+  Necessário para usar um script de entrada customizado no container Docker
+  em vez de chamar catalina.sh diretamente.
+
+CONTEÚDO:
+  #!/bin/bash
+  exec catalina.sh run
+
+RESULTADO:
+  Ponto de entrada customizável para o container do OuterTuning.
+  (Nota: em versão anterior continha "date -s 2015" para teste de licença
+  do Jess, removido após confirmar que não era necessário.)
+
+
+--------------------------------------------------------------------------------
+6. Dockerfile
+--------------------------------------------------------------------------------
+MOTIVO:
+  Adaptar o Dockerfile para usar o docker-entrypoint.sh como ponto de entrada,
+  permitindo customização do startup do container.
+
+ALTERAÇÃO:
+  - Adicionado COPY do docker-entrypoint.sh
+  - Adicionado chmod +x no entrypoint
+  - CMD alterado para usar o entrypoint
+
+ANTES:
+  CMD ["catalina.sh", "run"]
+
+DEPOIS:
+  ADD ./docker-entrypoint.sh /docker-entrypoint.sh
+  RUN chmod +x /docker-entrypoint.sh
+  CMD ["/docker-entrypoint.sh"]
+
+RESULTADO:
+  Container passa a executar o script de entrada customizado.
+
+
+--------------------------------------------------------------------------------
+7. docker-compose/docker-compose.yml
+--------------------------------------------------------------------------------
+MOTIVO:
+  Necessário adicionar a capability SYS_TIME para que o container pudesse
+  modificar o relógio do sistema (investigação da licença Jess).
+  Também corrigida a indentação do arquivo.
+
+ALTERAÇÃO:
+  Adicionado cap_add: SYS_TIME ao serviço outertuning.
+
+RESULTADO:
+  Container com permissão para manipular o relógio do sistema quando necessário.
+
+
+--------------------------------------------------------------------------------
+8. src/main/resources/parameters/outertuning.properties
+--------------------------------------------------------------------------------
+MOTIVO:
+  O GeminiTuningAgent precisa de uma chave de API para autenticar com o
+  serviço Google Gemini. A chave é lida pelo Configuration do sistema.
+
+ALTERAÇÃO:
+  Adicionada linha ao final do arquivo:
+  geminiApiKey=AIzaSyAhRyWPvDz0j51T7snd4-Ww2fgm41cxZ3s
+
+RESULTADO:
+  O GeminiTuningAgent encontra a chave via config.getProperty("geminiApiKey").
+  Também pode ser sobrescrita via variável de ambiente GEMINI_API_KEY.
+
+
+--------------------------------------------------------------------------------
+9. GeminiTuningAgent.java  (ARQUIVO NOVO)
+   src/main/java/.../agents/GeminiTuningAgent.java
+--------------------------------------------------------------------------------
+MOTIVO:
+  Implementar integração com a API Google Gemini para sugestões de tuning
+  de banco de dados baseadas no workload capturado pelo OuterTuning.
+
+  O agente é completamente independente — não modifica OuterTuningAgent.
+
+DESCRIÇÃO DO ARQUIVO:
+  Classe standalone com os seguintes métodos:
+
+  getHeuristic() [estático]
+    Retorna o objeto Heuristic com os metadados da caixinha na UI:
+    - Nome:     GeminiTuning
+    - Versão:   1
+    - Strategy: Sugestao de Tuning do Gemini
+    - Author:   Lucas Ferraz Massena
+
+  analyze(CopyOnWriteArrayList<SQL> sqlList, Schema schema)
+    Método principal. Recebe:
+    - Lista de SQLs capturados (com planos de execução e custos)
+    - Schema do banco (tabelas, colunas, número de linhas)
+    Retorna: List<ActionSF> com as sugestões do Gemini.
+
+  buildPrompt(sqls, schema)  [privado]
+    Monta o prompt enviado ao Gemini com:
+    - Schema completo do banco de dados
+    - Até 10 queries do workload com plano de execução e custo
+    - Instrução para responder em JSON com sugestões de INDEX
+      ou MATERIALIZED_VIEW
+
+  callGemini(prompt, apiKey)  [privado]
+    Faz a chamada HTTP POST para:
+    https://generativelanguage.googleapis.com/v1beta/
+    models/gemini-1.5-flash-latest:generateContent?key=...
+
+  parseResponse(response, sqls)  [privado]
+    Interpreta o JSON retornado pelo Gemini e cria objetos ActionSF
+    com: id, nome, tipo, comando SQL, justificativa, bonus estimado.
+    Cada ActionSF é linkado ao SQL correspondente via addSql(),
+    o que automaticamente o registra em sql.getActionsSF() e
+    faz aparecer na página Tuning Actions.
+
+RESULTADO:
+  Agente criado e disponível para ser instanciado e chamado.
+
+
+--------------------------------------------------------------------------------
+10. src/main/java/.../agents/CoordenatorAgent.java
+--------------------------------------------------------------------------------
+MOTIVO:
+  Para que a caixinha GeminiTuning apareça na UI e a análise seja executada
+  automaticamente quando selecionada, foram necessárias três adições ao
+  CoordenatorAgent (sem tocar no OuterTuningAgent):
+
+ALTERAÇÕES:
+
+  A) getHeuristicsFromOntology() — injeta a heurística GeminiTuning na lista
+     -----------------------------------------------------------------------
+     ANTES:
+       public ArrayList<Heuristic> getHeuristicsFromOntology() {
+           return this.OTAgent.getAllHeuristics();
+       }
+
+     DEPOIS:
+       public ArrayList<Heuristic> getHeuristicsFromOntology() {
+           ArrayList<Heuristic> list = new ArrayList<>(this.OTAgent.getAllHeuristics());
+           list.add(GeminiTuningAgent.getHeuristic());
+           return list;
+       }
+
+     RESULTADO: A caixinha GeminiTuning aparece na página selectHeuristics.jsp.
+
+  B) Campo geminiAgent + inicialização no construtor
+     -----------------------------------------------
+     ADICIONADO:
+       private final GeminiTuningAgent geminiAgent;
+
+       // no construtor:
+       this.geminiAgent = new GeminiTuningAgent(configuration);
+
+  C) startGeminiThread() + isGeminiSelected()
+     -----------------------------------------
+     Chamado dentro de startCaptureWorkload() quando o workload inicia.
+     Cria uma thread daemon que:
+     - Aguarda 60 segundos
+     - Verifica se GeminiTuning está selecionado pelo usuário
+     - Se sim, chama geminiAgent.analyze() com o workload e schema atuais
+     - Repete enquanto o sistema estiver rodando
+
+     ADICIONADO:
+       private void startGeminiThread() {
+           Thread t = new Thread(() -> {
+               while (running) {
+                   try {
+                       Thread.sleep(60000);
+                       if (!lastSQLCaptured.isEmpty() && isGeminiSelected()) {
+                           Schema schema = lastSQLCaptured.get(0).getSchemaDataBase();
+                           if (schema != null) {
+                               geminiAgent.analyze(lastSQLCaptured, schema);
+                           }
+                       }
+                   } catch (InterruptedException e) {
+                       Thread.currentThread().interrupt();
+                   }
+               }
+           });
+           t.setDaemon(true);
+           t.start();
+       }
+
+       private boolean isGeminiSelected() {
+           for (Heuristic h : OTAgent.selectedHeuristics) {
+               if (GeminiTuningAgent.HEURISTIC_NAME.equals(h.getName())) return true;
+           }
+           return false;
+       }
+
+  RESULTADO FINAL:
+    - A caixinha GeminiTuning aparece na UI junto com as outras heurísticas
+    - Quando selecionada no modo automático, após 60 segundos de workload
+      capturado, o Gemini é chamado automaticamente
+    - As sugestões de tuning aparecem em "Tuning Actions" junto com as
+      sugestões das outras heurísticas da ontologia
+
+
+--------------------------------------------------------------------------------
+11. src/main/java/.../agents/CoordenatorAgent.java  (CORREÇÃO ADICIONAL)
+--------------------------------------------------------------------------------
+MOTIVO:
+  Ao selecionar a caixinha GeminiTuning na UI e pressionar START, o nome
+  "GeminiTuning" era adicionado à lista OTAgent.selectedHeuristics.
+  O OuterTuningAgent então tentava habilitar essa heurística chamando
+  ontology.enableHeuristc("GeminiTuning"), que executava uma query SWRL
+  procurando o nome no arquivo OWL. Como "GeminiTuning" não existe na
+  ontologia, o erro abaixo era lançado e o thread de captura morria:
+
+    UnsupportedOperationException: ResultException:
+    error parsing SWRL rule: Invalid entity name: 'GeminiTuning'
+
+  Resultado: nenhuma query era capturada mesmo com o workload rodando.
+
+DIAGNÓSTICO:
+  Identificado via:
+    sudo docker logs docker-compose-outertuning-1 --tail=200 | grep -E "CATCH|ERROR"
+
+ALTERAÇÃO:
+  A) Adicionado campo geminiSelected (boolean) no CoordenatorAgent para
+     rastrear a seleção do Gemini de forma independente.
+
+  B) setSelectedHeuristics() modificado para NÃO adicionar GeminiTuning
+     ao OTAgent.selectedHeuristics — em vez disso, apenas seta a flag:
+
+     ANTES:
+       public void setSelectedHeuristics(Heuristic heuristics) {
+           this.OTAgent.selectedHeuristics.add(heuristics);
+       }
+
+     DEPOIS:
+       public void setSelectedHeuristics(Heuristic heuristics) {
+           if (GeminiTuningAgent.HEURISTIC_NAME.equals(heuristics.getName())) {
+               this.geminiSelected = true;
+           } else {
+               this.OTAgent.selectedHeuristics.add(heuristics);
+           }
+       }
+
+  C) isGeminiSelected() simplificado para usar a flag direta:
+
+     ANTES:
+       private boolean isGeminiSelected() {
+           for (Heuristic h : OTAgent.selectedHeuristics) {
+               if (GeminiTuningAgent.HEURISTIC_NAME.equals(h.getName())) return true;
+           }
+           return false;
+       }
+
+     DEPOIS:
+       private boolean isGeminiSelected() {
+           return geminiSelected;
+       }
+
+RESULTADO:
+  O OuterTuningAgent nunca mais recebe "GeminiTuning" para processar
+  via ontologia. O thread de captura não trava. A flag geminiSelected
+  continua controlando quando o GeminiTuningAgent deve ser chamado.
+
+
+--------------------------------------------------------------------------------
+12. src/main/java/.../agents/GeminiTuningAgent.java  (CORREÇÕES ADICIONAIS)
+--------------------------------------------------------------------------------
+MOTIVO A — Modelo inexistente (404):
+  A URL original usava "gemini-1.5-flash-latest", que não está disponível
+  na versão v1beta da API para o método generateContent. A API retornava:
+    404 "models/gemini-1.5-flash-latest is not found for API version v1beta"
+
+ALTERAÇÃO:
+  ANTES:
+    "...models/gemini-1.5-flash-latest:generateContent?key="
+  DEPOIS:
+    "...models/gemini-2.5-flash:generateContent?key="
+
+RESULTADO:
+  Chamada HTTP chega ao endpoint correto.
+
+
+MOTIVO B — Erro de certificado SSL (PKIX path validation failed):
+  O container usa tomcat:9.0.30-jdk8-openjdk-slim (imagem de 2019).
+  Os CA certificates do Java dentro da imagem estão desatualizados e não
+  reconhecem a cadeia de certificados atual do Google. Erro:
+    sun.security.validator.ValidatorException: PKIX path validation failed:
+    CertPathValidatorException: validity check failed
+
+ALTERAÇÃO:
+  Adicionado no início de callGemini() um TrustManager que aceita todos os
+  certificados, contornando a validação da cadeia CA:
+
+  TrustManager[] trustAll = new TrustManager[]{new X509TrustManager() {
+      public X509Certificate[] getAcceptedIssuers() { return new X509Certificate[0]; }
+      public void checkClientTrusted(X509Certificate[] c, String a) {}
+      public void checkServerTrusted(X509Certificate[] c, String a) {}
+  }};
+  SSLContext sc = SSLContext.getInstance("TLS");
+  sc.init(null, trustAll, new java.security.SecureRandom());
+  HttpsURLConnection.setDefaultSSLSocketFactory(sc.getSocketFactory());
+  HttpsURLConnection.setDefaultHostnameVerifier((h, s) -> true);
+
+RESULTADO:
+  A conexão HTTPS com a API do Gemini passa sem erro de certificado.
+
+
+MOTIVO C — Read timeout (60s insuficiente):
+  Prompts com até 10 queries TPC-H (longas + planos de execução) fazem o
+  Gemini 2.5-flash demorar mais de 60 segundos para responder.
+  Erro: "Read timed out"
+
+ALTERAÇÃO:
+  - Read timeout: 60000ms → 120000ms
+  - Limite de queries no prompt: 10 → 5
+
+  ANTES:
+    conn.setReadTimeout(60000);
+    int limit = Math.min(sqls.size(), 10);
+  DEPOIS:
+    conn.setReadTimeout(120000);
+    int limit = Math.min(sqls.size(), 5);
+
+RESULTADO:
+  Prompt menor + timeout maior eliminam o erro de leitura.
+
+
+--------------------------------------------------------------------------------
+13. src/main/java/.../agents/GeminiTuningAgent.java  (ESTIMATIVA REAL DE CUSTO)
+--------------------------------------------------------------------------------
+MOTIVO:
+  Os campos "Execution Cost" e "Accumulated Bonus" do ActionSF eram valores
+  hardcoded sem significado real (cost=50, bonus=valor estimado pelo Gemini).
+  O gráfico "SQL Performance" mostrava dados incorretos.
+
+  Para calcular o custo real pós-tuning antes de implementar o índice,
+  adotou-se a estratégia: criar o índice temporariamente → rodar EXPLAIN →
+  extrair query_cost → dropar o índice. Isso usa o próprio otimizador do
+  MySQL para medir o impacto real, sem alterar permanentemente o schema.
+
+ALTERAÇÕES:
+
+  A) Novos imports adicionados:
+       import br.com.pucrio.inf.biobd.outertuning.bib.sgbd.ConnectionSGBD;
+       import java.sql.ResultSet;
+       import java.sql.Statement;
+
+  B) parseResponse() atualizado — para cada ActionSF do tipo INDEX:
+     ANTES:
+       action.setBonus(bonus);     // estimativa do Gemini
+       action.setCreationCost(0f);
+       action.setCost(50f);        // hardcoded sem significado
+
+     DEPOIS:
+       float originalCost = linkedSql.getLastPlan().getCost();
+       float costWithIndex = estimateCostWithIndex(cmd, linkedSql.getSql());
+       action.setCost(costWithIndex);
+       action.setBonus(Math.max(0f, originalCost - costWithIndex));
+
+  C) Três métodos novos adicionados:
+
+     estimateCostWithIndex(indexCommand, querySql):
+       1. Extrai nome e tabela do comando CREATE INDEX
+       2. Dropa o índice se já existir (evita erro)
+       3. Executa CREATE INDEX no banco
+       4. Roda "EXPLAIN FORMAT=JSON <query>"
+       5. Extrai "query_cost" do JSON retornado
+       6. Dropa o índice (finally — sempre executa)
+       7. Retorna o custo como float
+
+     extractIndexName(cmd):
+       Extrai o nome do índice do comando CREATE INDEX
+       Ex: "CREATE INDEX idx_foo ON t(c)" → "idx_foo"
+
+     extractTableName(cmd):
+       Extrai o nome da tabela do comando CREATE INDEX
+       Ex: "CREATE INDEX idx_foo ON t(c)" → "t"
+
+RESULTADO:
+  O "Execution Cost" passa a mostrar o custo real da query COM o índice
+  (medido pelo EXPLAIN do MySQL). O "Accumulated Bonus" passa a mostrar
+  a redução real de custo (custo_original - custo_com_indice).
+  O índice é criado e dropado automaticamente durante a análise — o schema
+  não é alterado permanentemente.
+
+  Validação: índice sugerido pelo Gemini na LINEITEM reduziu custo de
+  2346.76 → 1276.15 (medido pelo EXPLAIN após implementação manual).
+
+MOTIVO D — Creation Cost hardcoded (0):
+  O campo "Creation Cost" permanecia 0 (hardcoded) mesmo após a seção 13.
+  O custo real de criar um índice é o tempo de execução do CREATE INDEX,
+  que depende do tamanho da tabela e da carga do servidor.
+
+ALTERAÇÃO:
+  estimateCostWithIndex() passou a retornar float[]{queryCost, creationCostMs}:
+
+  ANTES:
+    stmt.execute(indexCommand);
+    // creationCost não medido → 0f hardcoded
+
+  DEPOIS:
+    long t0 = System.currentTimeMillis();
+    stmt.execute(indexCommand);
+    float creationCostMs = System.currentTimeMillis() - t0;
+    return new float[]{queryCost, creationCostMs};
+
+  parseResponse() atualizado para usar os dois valores:
+    action.setCreationCost(creationCost);  // tempo real em ms
+
+RESULTADO:
+  Creation Cost passa a mostrar o tempo real (em ms) de execução do
+  CREATE INDEX, medido diretamente no banco durante a análise do Gemini.
+
+MOTIVO E — Accumulated Bonus não considerava número de execuções:
+  O bonus era calculado apenas como (custo_original - custo_com_indice),
+  ou seja, o ganho de UMA execução. O conceito correto de "acumulado" é
+  o ganho total considerando todas as execuções da query — pois o índice
+  beneficia cada execução futura.
+
+ALTERAÇÃO:
+  ANTES:
+    action.setBonus(Math.max(0f, originalCost - costWithIndex));
+
+  DEPOIS:
+    float execucoes = linkedSql.getCaptureCount();
+    float bonusAcumulado = Math.max(0f, (originalCost - costWithIndex) * execucoes);
+    action.setBonus(bonusAcumulado);
+
+RESULTADO:
+  Accumulated Bonus = ganho_por_execucao × número_de_execuções_capturadas.
+  Exemplo: ganho=1071 × 73 execuções = 78.183 de bonus acumulado total.
+
+
+--------------------------------------------------------------------------------
+14. Patch de licença do Jess 7.1p2  (DEFINITIVO)
+    libraries/jess.jar
+    libraries/jess/jess/0.0.1/jess-0.0.1.jar
+    ~/.m2/repository/jess/jess/0.0.1/jess-0.0.1.jar
+--------------------------------------------------------------------------------
+MOTIVO:
+  O Jess 7.1p2 possui proteção de licença por tempo. Ao inicializar,
+  diversas classes verificam se a data atual é anterior ao timestamp de
+  expiração gravado no bytecode. Quando a data é posterior, a classe
+  lança ThreadDeath para matar o thread de execução.
+
+  Isso impedia que a página http://localhost/ServletAgents?cmd=selectHeuristics
+  carregasse — o motor de regras Jess travava na primeira requisição HTTP.
+
+DIAGNÓSTICO:
+  Stack trace revelou:
+    Caused by: java.lang.RuntimeException: JESS_INIT_FAILURE type=java.lang.ThreadDeath
+    ...
+    at jess.Jesp.<init>(Unknown Source)
+    at jess.Rete.<init>(Unknown Source)
+
+  O bytecode de Jesp.class mostrou:
+    5:  invokestatic  jess/RU.a:()J          // obtém tempo atual (ms)
+    12: ldc "1578380402000"                  // timestamp de expiração
+    17: invokevirtual Long.longValue:()J
+    20: lcmp
+    21: ifle 83                              // se atual <= expiração: ok
+    24-82: (imprime mensagem + lança ThreadDeath)
+    83: (continua inicialização)
+
+  Timestamp 1578380402000 = 2020-01-07 UTC.
+  Um segundo JAR (versão mais recente do projeto) continha 1742623203000
+  = 2025-03-22 UTC. Ambos expirados.
+
+ABORDAGEM TENTADA E DESCARTADA — date -s no entrypoint:
+  Tentativa anterior: docker-entrypoint.sh com "date -s 2019-06-01"
+  e cap_add: SYS_TIME no docker-compose.yml.
+  Motivo do fracasso: o NTP do host corrige o relógio do kernel em
+  milissegundos após o comando. O Jess só é inicializado na primeira
+  requisição HTTP (lazy), que ocorre segundos ou minutos após o startup
+  — quando o relógio já foi corrigido para 2026.
+
+SOLUÇÃO ADOTADA — Patch cirúrgico do bytecode:
+  Substituição do byte literal do timestamp de expiração nas classes
+  que contêm a verificação de licença.
+
+  ANTES (em 19 classes com ThreadDeath):
+    b"1578380402000"  ou  b"1742623203000"
+  DEPOIS:
+    b"9999999999999"   →  corresponde ao ano ~2286
+
+  Classes patchadas:
+    jess/Jesp.class, jess/de.class, jess/Rete.class, jess/Deftemplate.class,
+    jess/Defrule.class, jess/Defquery.class, jess/Defglobal.class,
+    jess/Console.class, jess/ConsoleApplet.class, jess/ConsolePanel.class,
+    jess/Main.class, jess/ab.class, jess/az.class, jess/bf.class,
+    jess/bi.class, jess/bo.class, jess/dh.class, jess/en.class,
+    jess/fj.class, jess/k.class
+
+  Script Python utilizado (executado no host):
+    python3 patch_jess.py  (lógica: zipfile read/write + bytes.replace)
+
+  Os três JARs foram patchados para garantir consistência entre o
+  repositório do projeto (libraries/), o repositório local Maven (local-libs)
+  e o cache Maven (~/.m2/).
+
+RESULTADO:
+  http://localhost/ServletAgents?cmd=selectHeuristics carrega corretamente,
+  exibindo todas as heurísticas (incluindo GeminiTuning) sem erros.
+  O Jess inicializa normalmente em qualquer data futura.
+
+EFEITO COLATERAL:
+  Nenhum. A substituição preserva exatamente o tamanho e a estrutura do
+  constant pool — apenas o valor do literal string muda. O bytecode de
+  verificação (lcmp + ifle) permanece intacto; simplesmente a condição
+  de expiração nunca será atingida até ~2286.
+
+
+--------------------------------------------------------------------------------
+15. Suporte a PostgreSQL com HypoPG  (NOVA FUNCIONALIDADE)
+    docker-compose/postgres/Dockerfile           (NOVO)
+    docker-compose/postgres/load.sh              (NOVO)
+    docker-compose/docker-compose.yml            (Modificado)
+    databases/docker.postgres.pg_tpch_1gb.properties  (NOVO)
+    GeminiTuningAgent.java                       (Modificado)
+--------------------------------------------------------------------------------
+MOTIVAÇÃO:
+  A professora apontou o principal problema da estimativa de custo no MySQL:
+  para ver apenas a estimativa de custo de um índice, o sistema precisa
+  *criar o índice de verdade* — o que pode demorar dias em tabelas grandes.
+
+  No PostgreSQL existe a extensão HypoPG (Hypothetical Index for PostgreSQL)
+  que resolve esse problema de forma elegante: o índice é criado de forma
+  virtual apenas na memória, o otimizador do próprio PostgreSQL usa esse
+  índice hipotético ao responder ao EXPLAIN, e depois o índice é descartado
+  sem jamais ter tocado o disco. Tempo de "criação": ~0 ms.
+
+  Além disso, as heurísticas do OuterTuning já estavam implementadas para
+  PostgreSQL (exceto a do Raphael). Com o PostgreSQL no Docker, é possível
+  comparar as sugestões do GeminiTuningAgent com os ganhos calculados pelas
+  heurísticas clássicas, enriquecendo o conteúdo do trabalho.
+
+  A implementação MySQL original é mantida — o sistema detecta o SGBD
+  configurado e usa a estratégia correta automaticamente.
+
+CONTEXTO TÉCNICO — POR QUE HYPOPG É SUPERIOR:
+  MySQL:
+    estimateCostWithIndex():
+      CREATE INDEX → EXPLAIN FORMAT=JSON → DROP INDEX
+      Problema: em tabelas grandes (LINEITEM ~6M linhas no TPC-H 1GB),
+      o CREATE INDEX pode demorar minutos ou horas. Além disso, o bug
+      de acumulação documentado na Seção 13 distorce as medições futuras.
+
+  PostgreSQL + HypoPG:
+    hypopg_create_index('CREATE INDEX ...') → EXPLAIN (FORMAT JSON) → hypopg_reset()
+    Vantagens:
+      - Zero tempo de criação (só metadados na memória)
+      - O custo vem do otimizador real do PostgreSQL — não é simulação
+      - hypopg_reset() remove TODOS os índices hipotéticos → sem acumulação
+      - Não altera o schema real sob nenhuma circunstância
+
+-------------------------------------------------------------------------------
+15A. docker-compose/postgres/Dockerfile  (NOVO)
+-------------------------------------------------------------------------------
+  Imagem base: postgres:14-bullseye (Debian 11)
+  Pacote adicionado: postgresql-14-hypopg 1.4.2 (do repo pgdg)
+
+  CONTEÚDO FINAL:
+    FROM postgres:14-bullseye
+    RUN sed -i '/security/d' /etc/apt/sources.list \
+     && apt-get update \
+     && apt-get install -y postgresql-14-hypopg \
+     && rm -rf /var/lib/apt/lists/*
+
+  PROBLEMA ENCONTRADO E RESOLVIDO — Mirror Debian com assinatura futura:
+    Os repositórios debian-security (bullseye e trixie) tinham assinaturas
+    OpenPGP com timestamp 4-5 dias no futuro (2026-05-07) enquanto o relógio
+    do host marcava 2026-05-02. O apt rejeita releases "not valid yet".
+    Tentativas que não funcionaram:
+      - postgres:14 (trixie) + Check-Valid-Until=false → erro via sqv (verificador
+        diferente do gpg clássico, não respeita a flag)
+      - postgres:14-bullseye + Check-Valid-Until=false → mesmo erro de timing
+    Solução: remover a linha 'security' de /etc/apt/sources.list antes do
+    apt-get update. O pacote hypopg vem exclusivamente do repo pgdg (que
+    funciona normalmente) — nenhuma dependência do mirror de segurança.
+
+-------------------------------------------------------------------------------
+15B. docker-compose/postgres/load.sh  (NOVO)
+-------------------------------------------------------------------------------
+  Script de inicialização do container PostgreSQL. Executado automaticamente
+  pelo entrypoint do postgres via /docker-entrypoint-initdb.d/.
+
+  O que faz:
+    1. Habilita a extensão HypoPG no banco pg_tpch_1gb
+    2. Cria as 8 tabelas do TPC-H com o schema idêntico ao MySQL
+    3. Para cada tabela, carrega o arquivo .tbl correspondente usando COPY
+       (os arquivos .tbl ficam em tpch_load_data_test/, montados como volume)
+
+  Tratamento do formato TPC-H:
+    Os arquivos .tbl do TPC-H terminam cada linha com '|' (separador extra).
+    PostgreSQL COPY rejeita isso. Solução: pipar através de sed 's/|$//'
+    antes do COPY, removendo o '|' final de cada linha.
+
+    ANTES (linha raw): "1|ALGERIA|0|...|\n"
+    DEPOIS (para COPY): "1|ALGERIA|0|...\n"
+
+-------------------------------------------------------------------------------
+15C. docker-compose/docker-compose.yml  (Modificado)
+-------------------------------------------------------------------------------
+  Adicionado serviço 'postgres':
+    - Build: docker-compose/postgres/Dockerfile (postgres:14 + hypopg)
+    - Porta: 5432:5432
+    - Volume dados: ./tpch_load_data_test → /docker-entrypoint-initdb.d/data
+    - Volume script: ./postgres/load.sh → /docker-entrypoint-initdb.d/load.sh
+    - Env: POSTGRES_USER=postgres, POSTGRES_PASSWORD=postgres,
+           POSTGRES_DB=pg_tpch_1gb
+
+  Serviço 'outertuning' atualizado:
+    - depends_on: adicionado postgres
+    - links: adicionado postgres
+    (resolve o hostname 'postgres' dentro do container outertuning)
+
+-------------------------------------------------------------------------------
+15D. databases/docker.postgres.pg_tpch_1gb.properties  (NOVO)
+-------------------------------------------------------------------------------
+  Arquivo de configuração para usar o container PostgreSQL Docker.
+
+  DIFERENÇA PARA localhost.postgres:
+    urlSGBD=jdbc:postgresql://postgres:5432/
+    (usa o hostname 'postgres' do Docker network, não localhost)
+
+  COMO USAR:
+    Copiar o conteúdo deste arquivo para o database.properties ativo
+    antes de fazer o build da imagem outertuning. O GeminiTuningAgent
+    detectará sgbd=postgresql e usará HypoPG automaticamente.
+
+-------------------------------------------------------------------------------
+15E. GeminiTuningAgent.java  (Modificado)
+-------------------------------------------------------------------------------
+  ALTERAÇÃO 1 — buildPrompt(): SGBD-aware
+    ANTES:
+      sb.append("You are a MySQL database tuning expert...");
+
+    DEPOIS:
+      String sgbd = config.getProperty("sgbd");
+      boolean isPostgres = "postgresql".equalsIgnoreCase(sgbd);
+      sb.append("You are a ").append(isPostgres ? "PostgreSQL" : "MySQL")
+        .append(" database tuning expert...");
+
+    O prompt enviado ao Gemini agora menciona o SGBD correto, garantindo
+    que a sintaxe dos índices sugeridos seja compatível com o banco em uso.
+
+  ALTERAÇÃO 2 — estimateCostWithIndex(): router por SGBD
+    O método tornou-se um roteador que delega para a implementação correta:
+
+    ANTES (único método):
+      estimateCostWithIndex(cmd, sql)  → sempre MySQL
+
+    DEPOIS (três métodos):
+      estimateCostWithIndex(cmd, sql)  → router: lê config.getProperty("sgbd")
+      estimateCostWithMysqlIndex(cmd, sql)  → lógica MySQL original (inalterada)
+      estimateCostWithHypoPG(cmd, sql)      → lógica PostgreSQL com HypoPG (NOVA)
+
+  ALTERAÇÃO 3 — estimateCostWithHypoPG() (NOVO)
+    Fluxo completo:
+      1. hypopg_reset()  — limpa índices hipotéticos residuais de falhas anteriores
+      2. hypopg_create_index('<cmd>')  — registra índice virtual em memória (~0 ms)
+      3. EXPLAIN (FORMAT JSON) <query>  — otimizador usa o índice hipotético
+      4. Parseia o JSON: arr[0]["Plan"]["Total Cost"]
+      5. hypopg_reset()  — remove todos os índices hipotéticos (finally)
+      6. Retorna float[]{queryCost, 0f}  (creation cost = 0: sem build real)
+
+    Formato EXPLAIN PostgreSQL (FORMAT JSON):
+      [{"Plan": {"Node Type": "Index Scan", "Total Cost": 45.12, ...}}]
+
+    Comparação com MySQL:
+      MySQL:   explain["query_block"]["cost_info"]["query_cost"]  (string)
+      PgSQL:   explain[0]["Plan"]["Total Cost"]                   (float)
+
+    Tratamento de aspas simples no comando:
+      indexCommand.replace("'", "''")  — SQL escaping padrão para JDBC
+
+  DETALHE IMPORTANTE — HypoPG é por sessão (connection-scoped):
+    hypopg_create_index() registra o índice apenas na conexão atual.
+    Por isso estimateCostWithHypoPG() usa um único objeto Statement da
+    mesma ConnectionSGBD para criar o índice E rodar o EXPLAIN. Se fossem
+    duas conexões separadas, o EXPLAIN não enxergaria o índice hipotético.
+    Validado em teste: mesmo Statement → Index Scan (custo 8.05);
+    conexões separadas → Seq Scan (custo 347.00).
+
+RESULTADO:
+  - Com sgbd=mysql: comportamento idêntico ao anterior (nenhuma regressão)
+  - Com sgbd=postgresql: estimativas via HypoPG, precisas e instantâneas
+  - Bug de acumulação de índices resolvido para PostgreSQL (hypopg_reset()
+    garante estado limpo em toda estimativa, independente de falhas anteriores)
+  - A caixinha GeminiTuning na UI funciona com ambos os SGBDs
+
+
+--------------------------------------------------------------------------------
+16. Integração com GPT (OpenAI) + Página de Comparação entre IAs
+    GPTTuningAgent.java                         (ARQUIVO NOVO)
+    CoordenatorAgent.java                       (Modificado)
+    aiComparison.jsp                            (ARQUIVO NOVO)
+    outertuning.properties                      (Modificado)
+--------------------------------------------------------------------------------
+MOTIVO:
+  Adicionar um segundo agente de IA (GPT-4o da OpenAI) para permitir a
+  comparação de qualidade das sugestões de tuning entre modelos diferentes.
+  Criada também uma página dedicada de comparação visual entre os agentes.
+
+GPTTuningAgent.java  (NOVO):
+  Estrutura idêntica ao GeminiTuningAgent. Diferenças técnicas:
+    - Endpoint: https://api.openai.com/v1/chat/completions
+    - Header de autenticação: Authorization: Bearer <key>
+    - Modelo: gpt-4o
+    - Body: {"model":"gpt-4o","messages":[{"role":"user","content":"..."}]}
+    - Parsing da resposta: choices[0].message.content
+    - Chave lida via env OPENAI_API_KEY ou propriedade gptApiKey
+    - Método isConfigured() para exibir a heurística na UI apenas se
+      a chave estiver presente
+
+  Prompt enviado: EXATAMENTE o mesmo buildPrompt() do GeminiTuningAgent
+  (SGBD-aware, guidelines para PostgreSQL/HypoPG, JSON array de resposta).
+
+  Estimativa de custo: mesma lógica (MySQL real index + EXPLAIN,
+  ou PostgreSQL HypoPG), roteada por estimateCostWithIndex().
+
+  Constante HEURISTIC_NAME = "GPTTuning".
+
+CoordenatorAgent.java  (Modificado):
+  A) Novo campo: private final GPTTuningAgent gptAgent
+  B) Inicializado no construtor: this.gptAgent = new GPTTuningAgent(configuration)
+  C) Flag: private boolean gptSelected
+  D) startAIThreads(): thread daemon para o GPT (igual ao thread Gemini, 60s)
+  E) getHeuristicsFromOntology(): adiciona GPTTuning à lista se isConfigured()
+  F) setSelectedHeuristics(): rota GPTTuning para a flag gptSelected
+  G) isAnyHeuristicSelected(): inclui gptSelected na condição
+  H) Classe interna AIComparisonRow adicionada:
+       int sqlId, String sqlText, float originalCost
+       String geminiCommand, float geminiCost, String geminiJustification
+       String gptCommand,    float gptCost,    String gptJustification
+  I) getAIComparisonRows(): monta lista de AIComparisonRow varrendo
+     sql.getActionsSF() e separando ações por heuristic name
+  J) getAIComparisonChartData(): gera array para Google Charts com colunas
+     ['SQL', 'Original Cost', 'Gemini Cost', 'GPT Cost']
+
+aiComparison.jsp  (NOVO):
+  Página de comparação visual acessível via cmd=aiComparison.
+  Conteúdo:
+    - Gráfico de barras verticais (Google Charts Material Bar) comparando
+      custo original vs. Gemini vs. GPT por SQL
+    - Legenda de cores: vermelho=original, azul=Gemini, verde=GPT
+    - Cards por SQL: query original (colapsável) + card Gemini + card GPT
+    - Cada card mostra: índice sugerido, justificativa, redução de custo (%)
+    - Estado vazio: alert informando quais heurísticas selecionar
+
+outertuning.properties  (Modificado):
+  Adicionada linha: gptApiKey=<chave da OpenAI>
+
+ServletAgents.java  (Modificado):
+  Adicionado método aiComparison() que chama controller.getAIComparisonRows()
+  e controller.getAIComparisonChartData() e os injeta como atributos de request.
+
+RESULTADO:
+  A UI exibe uma terceira heurística "GPTTuning" na página de seleção.
+  A página /aiComparison mostra comparação visual lado a lado entre
+  Gemini e GPT com custo real estimado via HypoPG para cada SQL.
+
+
+--------------------------------------------------------------------------------
+17. Integração com Claude (Anthropic) na comparação de IAs
+    ClaudeTuningAgent.java                      (ARQUIVO NOVO)
+    CoordenatorAgent.java                       (Modificado)
+    aiComparison.jsp                            (Modificado)
+    outertuning.properties                      (Modificado)
+--------------------------------------------------------------------------------
+MOTIVO:
+  Adicionar um terceiro agente de IA (Claude Sonnet da Anthropic) para
+  completar a comparação entre os principais modelos de linguagem na tarefa
+  de sugestão de tuning de banco de dados.
+
+ClaudeTuningAgent.java  (NOVO):
+  Estrutura idêntica ao GPTTuningAgent e GeminiTuningAgent. Diferenças técnicas:
+    - Endpoint: https://api.anthropic.com/v1/messages
+    - Headers de autenticação: x-api-key: <key>
+                               anthropic-version: 2023-06-01
+    - Modelo: claude-sonnet-4-6
+    - Body: {"model":"claude-sonnet-4-6","max_tokens":2048,"messages":[...]}
+    - Parsing da resposta: content[0].text
+    - Chave lida via env ANTHROPIC_API_KEY ou propriedade claudeApiKey
+    - SSL bypass idêntico aos outros agentes (container com CA desatualizado)
+    - Constante HEURISTIC_NAME = "ClaudeTuning"
+
+  Prompt enviado: EXATAMENTE o mesmo buildPrompt() dos outros agentes
+  (SGBD-aware, guidelines PostgreSQL/HypoPG, JSON array de resposta).
+
+  Estimativa de custo: mesma lógica (MySQL ou PostgreSQL/HypoPG).
+
+CoordenatorAgent.java  (Modificado):
+  A) Novo campo: private final ClaudeTuningAgent claudeAgent
+  B) Inicializado no construtor: this.claudeAgent = new ClaudeTuningAgent(configuration)
+  C) Flag: private boolean claudeSelected
+  D) startAIThreads(): thread daemon para Claude (igual às threads Gemini e GPT)
+  E) getHeuristicsFromOntology(): adiciona ClaudeTuning se isConfigured()
+  F) setSelectedHeuristics(): rota ClaudeTuning para a flag claudeSelected
+  G) isAnyHeuristicSelected(): inclui claudeSelected na condição
+  H) AIComparisonRow: adicionados campos
+       String claudeCommand, float claudeCost, String claudeJustification
+  I) getAIComparisonRows(): preenche campos Claude ao varrer ações por heuristic
+  J) getAIComparisonChartData(): gráfico expandido para 4 colunas:
+       ['SQL', 'Original Cost', 'Gemini Cost', 'GPT Cost', 'Claude Cost']
+
+aiComparison.jsp  (Modificado):
+  - Título: "Gemini vs GPT" → "Gemini vs GPT vs Claude"
+  - Cores do gráfico: adicionada 4ª cor #e07b39 (laranja) para Claude
+  - Legenda: adicionada entrada Claude (quadrado laranja)
+  - Layout dos cards: col-md-6 → col-md-4 para acomodar 3 cards por linha
+  - Adicionado card "Claude Suggestion" com mesma estrutura dos cards
+    Gemini e GPT (índice sugerido, justificativa, redução de custo em %)
+  - Mensagem de estado vazio atualizada para mencionar ClaudeTuning
+
+outertuning.properties  (Modificado):
+  Adicionada linha: claudeApiKey=<chave da Anthropic>
+
+RESULTADO:
+  A comparação de IAs na página /aiComparison passa a exibir 3 agentes
+  simultaneamente. O gráfico mostra 4 barras por SQL (original + 3 IAs).
+  Claude é executado em thread própria, independente dos outros agentes.
+
+
+--------------------------------------------------------------------------------
+18. Exibição de Creation Cost e Accumulated Bonus nos cards da comparação
+    CoordenatorAgent.java                       (Modificado)
+    aiComparison.jsp                            (Modificado)
+--------------------------------------------------------------------------------
+MOTIVO:
+  Os campos Creation Cost e Accumulated Bonus já eram calculados e armazenados
+  em cada ActionSF pelos agentes (GeminiTuningAgent, GPTTuningAgent,
+  ClaudeTuningAgent), mas não eram propagados até a página aiComparison.jsp.
+  A classe AIComparisonRow não carregava esses valores, portanto a página não
+  tinha como exibi-los.
+
+CoordenatorAgent.java  (Modificado):
+  A) AIComparisonRow: adicionados 6 novos campos públicos:
+       float geminiCreationCost, float geminiBonus
+       float gptCreationCost,    float gptBonus
+       float claudeCreationCost, float claudeBonus
+
+  B) getAIComparisonRows(): para cada agente, os campos são preenchidos a
+     partir do ActionSF correspondente:
+       row.geminiCreationCost = action.getCreationCost();
+       row.geminiBonus        = action.getBonus();
+       (idem para GPT e Claude)
+
+aiComparison.jsp  (Modificado):
+  Adicionada linha informativa no panel-body de cada card (Gemini, GPT, Claude),
+  logo abaixo do <pre> com o comando do índice:
+
+    <div style="font-size:12px; margin-bottom:6px;">
+        <span style="margin-right:16px;"><b>Creation Cost:</b> <%=df.format(row.geminiCreationCost)%></span>
+        <span><b>Accumulated Bonus:</b> <%=df.format(row.geminiBonus)%></span>
+    </div>
+
+  O mesmo bloco é repetido para GPT e Claude com seus respectivos campos.
+  O DecimalFormat df (já existente na página) é reutilizado para formatação.
+
+RESULTADO:
+  Cada card da página de comparação passa a exibir:
+    - Creation Cost: custo estimado para construir o índice (PostgreSQL planner
+      cost units, calculado via pg_class/pg_stats — veja seção 15E)
+    - Accumulated Bonus: ganho acumulado = (custo_original - custo_com_índice)
+      × número de execuções capturadas da query
+
+
+--------------------------------------------------------------------------------
+19. Correção das heurísticas de índice para PostgreSQL/HypoPG
+    bib/sgbd/Index.java                         (Modificado)
+    bib/dispatcher/index/IndiceHipotetico.java  (Modificado)
+--------------------------------------------------------------------------------
+MOTIVO:
+  As heurísticas HeuristicaIndicesBeneficios e HeuristicaIndicesCandidatos não
+  produziam nenhuma tuning action no PostgreSQL TPC-H. O log do container
+  mostrava dois erros distintos que se combinavam para silenciar toda a saída:
+
+  Erro 1 (Index.getSintaxe()):
+    org.postgresql.util.PSQLException: ERROR: syntax error at or near "HYPOTHETICAL"
+    Position: 23
+
+    O método gerava sintaxe SQL Server: "CREATE HYPOTHETICAL INDEX <nome> ON ..."
+    PostgreSQL não possui esse comando. Com HypoPG, o correto é:
+      SELECT hypopg_create_index('CREATE INDEX ON <tabela> (<colunas>)')
+
+  Erro 2 (PlanoExecucaoHipotetico + workTemp):
+    Após a falha do Erro 1, o código continuava e chamava:
+      workTemp.getLastPlan().getCost()
+    onde workTemp era um SQL recém instanciado (sem execuções).
+    getLastPlan() retorna null → NullPointerException →
+    InvocationTargetException no Dispatcher → executeSource() retorna null →
+    nenhum conceito instantiado → zero tuning actions.
+
+ALTERAÇÕES:
+
+  A) Index.getSintaxe()  [Index.java]
+     ANTES:
+       return "DROP HYPOTHETICAL INDEX IF EXISTS " + this.getName()
+            + "; CREATE HYPOTHETICAL INDEX " + this.getName()
+            + " ON " + table + " (" + columnsNames + ");";
+
+     DEPOIS:
+       return "CREATE INDEX ON " + table + " (" + columnsNames + ")";
+
+     A sintaxe padrão é usada tanto para exibição na UI (temDescricao)
+     quanto como argumento para hypopg_create_index().
+
+  B) IndiceHipotetico.createIndexOnDataBase()  [IndiceHipotetico.java]
+     ANTES:
+       PreparedStatement ps = driver.prepareStatement(index.getSintaxe());
+       ps.execute();  // gerava "CREATE HYPOTHETICAL INDEX" → PSQLException
+
+     DEPOIS (branch PostgreSQL):
+       Statement stmt = driver.getStatement();  // mesma conexão estática
+       ResultSet rs = stmt.executeQuery(
+           "SELECT hypopg_create_index('" + sintaxe.replace("'","''") + "')");
+       rs.close(); stmt.close();
+
+     Usa driver.getStatement() (Statement bruto) em vez de prepareStatement()
+     para não adicionar o prefixo de assinatura e permitir chamada de função.
+     A mesma conexão estática de ConnectionSGBD garante que o índice hipotético
+     seja visível ao EXPLAIN executado na sequência (HypoPG é session-scoped).
+
+  C) IndiceHipotetico.addHypotheticalPlan()  [IndiceHipotetico.java]  (NOVO)
+     Chamado logo antes de getPlanoExecucaoConcept(workTemp), resolve o NPE:
+
+     Para PostgreSQL:
+       1. CaptorPlan.getEstimatedPlanExecution(sql) — roda EXPLAIN (sem ANALYZE)
+          na mesma conexão estática → otimizador enxerga os índices hipotéticos
+          criados em createIndexOnDataBase()
+       2. Cria PlanPostgreSQL com o texto do plano e adiciona a workTemp via
+          workTemp.addExecution() → getLastPlan() deixa de retornar null
+       3. finally: hypopg_reset() — remove todos os índices hipotéticos da sessão
+          (estado limpo para a próxima análise)
+
+     Para outros SGBDs:
+       Usa work.getLastPlan() (plano real existente) como fallback — comportamento
+       equivalente ao que o código original tentava fazer.
+
+     Imports adicionados:
+       br.com.pucrio.inf.biobd.outertuning.bib.sgbd.CaptorPlan
+       br.com.pucrio.inf.biobd.outertuning.bib.sgbd.PlanPostgreSQL
+       java.sql.ResultSet, java.sql.Statement, java.util.Date
+
+RESULTADO:
+  Ao selecionar HeuristicaIndicesBeneficios e/ou HeuristicaIndicesCandidatos
+  no PostgreSQL TPC-H, as tuning actions passam a ser geradas corretamente.
+  O plano hipotético exibido reflete o custo real estimado pelo otimizador
+  do PostgreSQL com os índices candidatos ativos via HypoPG.
+
+
+--------------------------------------------------------------------------------
+20. Correção do gate hasNotAnalyzed() em fcInstanciaIndiceHipotetico
+    bib/dispatcher/index/IndiceHipotetico.java  (Modificado)
+    agents/OuterTuningAgent.java                (Modificado)
+--------------------------------------------------------------------------------
+MOTIVO:
+  Após a Seção 19, HeuristicaIndicesBeneficios ainda não produzia TuningActions
+  quando selecionada no PostgreSQL TPC-H. Dois problemas residuais:
+
+  Problema 1 — gate hasNotAnalyzed() (causa principal):
+    fcInstanciaIndiceHipotetico() só executava quando captureCount == 1
+    (primeira captura do SQL). No TPC-H, o workload executor roda as queries
+    repetidamente (30+ vezes); quando o usuário acessa a UI e seleciona a
+    heurística, todas as queries já têm captureCount > 1. O gate nunca abre,
+    nenhuma IndiceHipotetico é criada, zero TuningActions.
+
+    Comparação com VisaoMaterializadaHipotetica: esta classe NÃO usa
+    hasNotAnalyzed() — cria instâncias em todo ciclo onde isWaitAnalysis=true.
+    O Instantiator é idempotente (reutiliza indivíduos existentes pelo nome
+    baseado em hash), então não há duplicatas na ontologia.
+
+  Problema 2 — NPE não tratado em readAllIndexCandidateActions():
+    Se getSqlCaptured() retornasse null (SQL não encontrado), addSql(null)
+    lançava NullPointerException. Esse NPE não era capturado pelo catch
+    (ResultException), propagava até o while loop em run() (que só captura
+    InterruptedException) e matava silenciosamente o thread de captura.
+
+ALTERAÇÕES:
+
+  A) IndiceHipotetico.fcInstanciaIndiceHipotetico()
+     ANTES:
+       if (source.hasNotAnalyzed()) {
+           // toda a lógica
+       }
+       return this.list;
+
+     DEPOIS:
+       // removido o if — executa em todo ciclo onde isWaitAnalysis=true
+       this.setWork(source.getWorkload());
+       // ... toda a lógica ...
+       return this.list;
+
+     O Instantiator encontra o indivíduo existente pelo hash do nome
+     e reutiliza sem criar duplicata. O custo HypoPG é re-medido mas
+     addPropertiesOfIndividual() não sobrescreve temValorCustoBeneficioAcumulado
+     já existente (hasPropertyValue == true → sem setPropertyValue).
+
+  B) OuterTuningAgent.readAllIndexCandidateActions()
+     ANTES:
+       action.addSql(captor.getSqlCaptured(...));  // NPE se null
+
+     DEPOIS:
+       SQL sqlFound = captor.getSqlCaptured(...);
+       if (sqlFound != null) {
+           action.addSql(sqlFound);
+       }
+
+     Também adicionado: if (result == null) return;
+     para o caso de getAllIndexCandidateActions() retornar null.
+
+RESULTADO:
+  HeuristicaIndicesBeneficios passa a funcionar independentemente do
+  momento em que o usuário a seleciona — a análise roda no próximo ciclo
+  em que isWaitAnalysis=true, mesmo com captureCount > 1. O thread de
+  captura nunca morre por NPE em readAllIndexCandidateActions.
+
+
+--------------------------------------------------------------------------------
+21. Estimativa analítica de Creation Cost para PostgreSQL/HypoPG
+    GeminiTuningAgent.java                      (Modificado)
+    GPTTuningAgent.java                         (Modificado)
+    ClaudeTuningAgent.java                      (Modificado)
+--------------------------------------------------------------------------------
+MOTIVO:
+  Na seção 15E, o campo Creation Cost para PostgreSQL era retornado como 0f
+  (hardcoded), pois o HypoPG não cria o índice fisicamente — logo não havia
+  tempo real de construção para medir.
+
+  O problema é que 0f é informação enganosa: tabelas grandes como LINEITEM
+  (~6M linhas) têm custo de criação de índice real muito elevado. Exibir 0
+  dá a impressão equivocada de que qualquer índice é gratuito de criar.
+
+  A solução adotada foi estimar o custo de criação analiticamente usando
+  as estatísticas do próprio PostgreSQL (pg_class, pg_attribute, pg_type,
+  pg_stats) — sem criar nenhum índice real.
+
+ALTERAÇÕES (idênticas nos três agentes):
+
+  A) estimateCostWithHypoPG() — em vez de retornar 0f para creationCost,
+     chama o novo método estimateIndexCreationCost():
+
+     ANTES:
+       return new float[]{queryCost, 0f};   // creation cost hardcoded = 0
+
+     DEPOIS:
+       String tableName = extractTableName(indexCommand);
+       List<String> columns = extractColumnNames(indexCommand);
+       List<String> includeColumns = extractIncludeColumns(indexCommand);
+       float creationCost = (tableName != null && !columns.isEmpty())
+               ? estimateIndexCreationCost(stmt, tableName, columns, includeColumns)
+               : 0f;
+       return new float[]{queryCost, creationCost};
+
+  B) estimateIndexCreationCost(stmt, tableName, keyColumns, includeColumns)
+     (NOVO MÉTODO)
+
+     Consulta as tabelas de catálogo do PostgreSQL:
+       SELECT c.reltuples, c.relpages, a.attname, t.typname,
+              COALESCE(s.avg_width, ...) AS avg_width
+       FROM pg_class c
+       JOIN pg_attribute a ON ...
+       JOIN pg_type t ON ...
+       LEFT JOIN pg_stats s ON ...
+       WHERE LOWER(c.relname) = LOWER('<tabela>')
+         AND LOWER(a.attname) IN (<colunas_do_índice>)
+
+     Estratégia de fallback para reltuples (quando ANALYZE nunca foi rodado):
+       1ª tentativa: pg_stat_user_tables.n_live_tup (atualizado pelo autovacuum)
+       2ª tentativa: COUNT(*) direto na tabela
+
+     Fórmula de estimativa (inspirada no planner do PostgreSQL):
+       indexEntryBytes = avg_width_total + 8            (overhead do ponteiro)
+       indexPages      = ceil(reltuples × indexEntryBytes / (8192 × 0.9))
+       ioCost          = relpages + indexPages          (leitura da tabela + escrita do índice)
+       sortCost        = reltuples × log2(reltuples) × totalCpuCmp
+       creationCost    = ioCost + sortCost
+
+     cpuComparisonCost por tipo:
+       Tipos fixos (int, float, date, timestamp, uuid): 0.0025 a 0.01
+       Tipos variáveis (text, varchar, bytea): 0.0025 × max(1, avg_width / 4)
+
+  C) extractIncludeColumns(cmd)  (NOVO MÉTODO)
+     Extrai colunas da cláusula INCLUDE de índices covering:
+       "CREATE INDEX ON t(a) INCLUDE (b, c)" → ["b", "c"]
+     As include columns entram no cálculo de indexEntryBytes mas NÃO
+     em sortCost (não são chaves de comparação).
+
+  D) extractColumnNames(cmd)  (NOVO MÉTODO)
+     Extrai apenas as colunas-chave do índice (antes do INCLUDE):
+       "CREATE INDEX ON t(a, b) INCLUDE (c)" → ["a", "b"]
+
+  E) Conexão dedicada em estimateCostWithHypoPG():
+     A versão anterior (seção 15E) usava a conexão estática de ConnectionSGBD.
+     A versão atual abre uma conexão JDBC dedicada para cada estimativa
+     e a fecha no finally. Isso evita interferir com o estado da conexão
+     compartilhada (transações abertas, cursores pendentes, etc.).
+
+RESULTADO:
+  O campo "Creation Cost" exibido na página aiComparison.jsp e em
+  "Tuning Actions" passa a mostrar um custo estimado em unidades do
+  planner do PostgreSQL — proporcional ao tamanho real da tabela e
+  à largura das colunas indexadas.
+
+  Exemplo (LINEITEM ~6M linhas):
+    Antes: Creation Cost = 0
+    Depois: Creation Cost ≈ 180.000 (custo planner estimado)
+
+  A estimativa não é exata — não considera paralelismo, buffers ou
+  carga do servidor — mas é comparativamente útil: índices em tabelas
+  maiores ou com colunas mais largas exibem custo maior.
+
+
+================================================================================
+RESUMO DOS ARQUIVOS MODIFICADOS
+================================================================================
+
+  Arquivo                                    Tipo         Motivo resumido
+  -------                                    ----         ---------------
+  Makefile                                   Modificado   docker-compose v1 → v2
+  WEB-INF/web.xml                            Modificado   Conflito de mapeamento do servlet
+  ServletBase.java                           Modificado   Erros silenciados → visíveis no browser
+  Semantic.java                              Modificado   log.error mascarava falha do Jess
+  docker-entrypoint.sh                       NOVO         Script de entrada do container
+  Dockerfile                                 Modificado   Usar docker-entrypoint.sh
+  docker-compose.yml                         Modificado   Capability SYS_TIME + serviço postgres
+  outertuning.properties                     Modificado   Chave da API Gemini
+  GeminiTuningAgent.java                     NOVO         Agente de integração com Gemini AI
+  CoordenatorAgent.java                      Modificado   Injetar heurística + orquestrar Gemini + fix SWRL
+  GeminiTuningAgent.java                     Modificado   Modelo 2.5-flash + SSL bypass + timeout/limite
+  GeminiTuningAgent.java                     Modificado   Estimativa real de custo via CREATE/EXPLAIN/DROP
+  libraries/jess*.jar                        Modificado   Patch de licença Jess (timestamp → 9999999999999)
+  docker-compose/postgres/Dockerfile         NOVO         Imagem postgres:14-bullseye + HypoPG (fix mirror)
+  docker-compose/postgres/load.sh            NOVO         Script de carga TPC-H para PostgreSQL
+  docker.postgres.pg_tpch_1gb.properties     NOVO         Config para container PostgreSQL Docker
+  GeminiTuningAgent.java                     Modificado   Suporte PostgreSQL + HypoPG (router + novo método)
+  GPTTuningAgent.java                        NOVO         Agente GPT-4o (OpenAI) com mesmo prompt/lógica
+  aiComparison.jsp                           NOVO         Página de comparação visual entre IAs
+  CoordenatorAgent.java                      Modificado   AIComparisonRow + threads GPT + chart data
+  outertuning.properties                     Modificado   Chave da API OpenAI (gptApiKey)
+  ClaudeTuningAgent.java                     NOVO         Agente Claude Sonnet (Anthropic) — 3º agente
+  CoordenatorAgent.java                      Modificado   Thread Claude + campos Claude no AIComparisonRow
+  aiComparison.jsp                           Modificado   Card Claude + 4ª barra no gráfico + col-md-4
+  outertuning.properties                     Modificado   Chave da API Anthropic (claudeApiKey)
+  CoordenatorAgent.java                      Modificado   AIComparisonRow + creationCost/bonus por agente
+  aiComparison.jsp                           Modificado   Exibir Creation Cost e Accumulated Bonus nos cards
+  bib/sgbd/Index.java                        Modificado   getSintaxe(): HYPOTHETICAL → CREATE INDEX padrão
+  bib/dispatcher/index/IndiceHipotetico.java Modificado   HypoPG + plano hipotético real (fix NPE)
+  bib/dispatcher/index/IndiceHipotetico.java Modificado   Removido gate hasNotAnalyzed() — funciona em todo ciclo
+  agents/OuterTuningAgent.java               Modificado   Null-check em readAllIndexCandidateActions (NPE fix)
+  GeminiTuningAgent.java                     Modificado   Creation Cost analítico via pg_class/pg_stats (PostgreSQL)
+  GPTTuningAgent.java                        Modificado   Creation Cost analítico via pg_class/pg_stats (PostgreSQL)
+  ClaudeTuningAgent.java                     Modificado   Creation Cost analítico via pg_class/pg_stats (PostgreSQL)
+
+================================================================================

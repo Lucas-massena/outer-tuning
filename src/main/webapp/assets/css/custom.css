@@ -1,0 +1,21 @@
+#columnchart_values g {
+    cursor: pointer;
+}
+
+.modules_sql {
+    position: relative;
+    padding: 15px;
+    height: auto;
+    border-bottom: 1px solid #ccc;
+    margin-left: 10px;
+    margin-right: 10px;
+    /*border-radius: 10px;*/
+}
+
+.modules_sql th, td {
+    padding: 4px;
+}
+.modules_sql th{
+    text-align: center;
+}
+

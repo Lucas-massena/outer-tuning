@@ -1,0 +1,112 @@
+version: '3.1'
+
+services:
+
+  mysql:
+    image: mysql:8.0.19
+    command: --default-authentication-plugin=mysql_native_password --secure-file-priv=/opt --lower-case-table-names=1
+    restart: always
+    ports:
+      - 3306:3306
+      - 33060:33060
+    volumes:
+      - ./tpch_load_data_test:/opt
+      - ./tpch_load_data_test/load.sh:/docker-entrypoint-initdb.d/load.sh
+    environment:
+      MYSQL_ROOT_PASSWORD: example
+      MYSQL_DATABASE: mysql
+    security_opt:
+      - seccomp:unconfined
+
+  workload:
+    image: workload-executor
+    restart: always
+    build:
+      context: ./tpch_workload_executor
+      dockerfile: ./Dockerfile
+    depends_on:
+      - mysql
+    links:
+      - mysql
+
+  workload-postgres:
+    image: workload-executor
+    restart: always
+    depends_on:
+      - postgres
+    links:
+      - postgres
+    volumes:
+      - ./tpch_workload_executor/pg_docker.config:/pg_docker.config
+    command: python ./main.py pg_docker postgresql EXPLAIN 0.25
+
+  postgres:
+    build:
+      context: ./postgres
+      dockerfile: Dockerfile
+    restart: always
+    command: postgres -c shared_preload_libraries=pg_stat_statements -c pg_stat_statements.track=all -c pg_stat_statements.track_utility=off
+    ports:
+      - 5432:5432
+    volumes:
+      - ./tpch_load_data_test:/docker-entrypoint-initdb.d/data
+      - ./postgres/load.sh:/docker-entrypoint-initdb.d/load.sh
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_DB: pg_tpch_1gb
+      POSTGRES_HOST_AUTH_METHOD: md5
+
+  outertuning:
+    image: outertuning
+    restart: always
+    depends_on:
+      - mysql
+      - postgres
+    links:
+      - mysql
+      - postgres
+    ports:
+      - 80:8080
+    cap_add:
+      - SYS_TIME
+
+  outertuning-postgres:
+    image: outertuning:postgres
+    restart: always
+    depends_on:
+      - postgres
+    links:
+      - postgres
+    ports:
+      - 81:8080
+    cap_add:
+      - SYS_TIME
+
+  hammerdb:
+    build:
+      context: ./hammerdb
+      dockerfile: Dockerfile
+    restart: always
+    depends_on:
+      - postgres
+    links:
+      - postgres
+    environment:
+      PG_HOST: postgres
+      PG_PORT: 5432
+      PG_USER: postgres
+      PGPASSWORD: postgres
+
+  outertuning-postgres-tpcc:
+    image: outertuning:postgres-tpcc
+    restart: always
+    depends_on:
+      - postgres
+      - hammerdb
+    links:
+      - postgres
+    ports:
+      - 82:8080
+    cap_add:
+      - SYS_TIME

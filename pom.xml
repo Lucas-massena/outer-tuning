@@ -1,0 +1,448 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <version>1.0.0</version>
+    <artifactId>outertuning</artifactId>
+    <groupId>br.com.pucrio.inf.biobd</groupId>
+    <packaging>war</packaging>
+
+    <properties>
+        <maven.compiler.source>1.8</maven.compiler.source>
+        <maven.compiler.target>1.8</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    </properties>
+
+    <dependencies>
+
+        <dependency>
+            <version>2.7.5</version>
+            <groupId>antlr</groupId>
+            <artifactId>antlr</artifactId>
+        </dependency>
+
+        <dependency>
+            <version>3.3</version>
+            <groupId>org.antlr</groupId>
+            <artifactId>antlr-runtime</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.codehaus.woodstox</groupId>
+            <artifactId>wstx-asl</artifactId>
+            <version>3.0.0</version>
+        </dependency>
+
+        <dependency>
+            <version>2.7.0</version>
+            <artifactId>arq</artifactId>
+            <groupId>com.hp.hpl.jena</groupId>
+        </dependency>
+
+        <dependency>
+            <version>2.7.0</version>
+            <artifactId>arq-extra</artifactId>
+            <groupId>com.hp.hpl.jena</groupId>
+        </dependency>
+
+        <dependency>
+            <version>1.4</version>
+            <artifactId>axis</artifactId>
+            <groupId>org.apache.axis</groupId>
+        </dependency>
+
+        <dependency>
+            <version>0.4</version>
+            <artifactId>commons-discovery</artifactId>
+            <groupId>commons-discovery</groupId>
+        </dependency>
+
+        <dependency>
+            <version>2.0</version>
+            <groupId>commons-lang</groupId>
+            <artifactId>commons-lang</artifactId>
+        </dependency>
+
+        <dependency>
+            <version>1.1.1</version>
+            <groupId>commons-logging</groupId>
+            <artifactId>commons-logging</artifactId>
+        </dependency>
+
+        <dependency>
+            <version>1.3.4</version>
+            <groupId>concurrent</groupId>
+            <artifactId>concurrent</artifactId>
+        </dependency>
+
+        <dependency>
+            <version>5.4.0.Final</version>
+            <groupId>org.drools</groupId>
+            <artifactId>drools-compiler</artifactId>
+        </dependency>
+
+        <dependency>
+            <version>5.4.0.Final</version>
+            <groupId>org.drools</groupId>
+            <artifactId>drools-core</artifactId>
+        </dependency>
+
+        <dependency>
+            <version>5.4.0.Final</version>
+            <groupId>org.drools</groupId>
+            <artifactId>knowledge-api</artifactId>
+        </dependency>
+
+        <dependency>
+            <version>5.4.0.Final</version>
+            <groupId>org.drools</groupId>
+            <artifactId>knowledge-internal-api</artifactId>
+        </dependency>
+
+        <dependency>
+            <version>1.2.1</version>
+            <groupId>edtftp</groupId>
+            <artifactId>edtftp</artifactId>
+        </dependency>
+
+        <dependency>
+            <version>2.3</version>
+            <artifactId>gson</artifactId>
+            <groupId>com.google.code.gson</groupId>
+        </dependency>
+
+        <dependency>
+            <version>3.4.4</version>
+            <artifactId>icu4j</artifactId>
+            <groupId>com.ibm.icu</groupId>
+        </dependency>
+
+        <dependency>
+            <version>0.8</version>
+            <artifactId>iri</artifactId>
+            <groupId>com.hp.hpl.jena</groupId>
+        </dependency>
+
+        <dependency>
+            <version>1.3.2</version>
+            <groupId>com.toedter</groupId>
+            <artifactId>jcalendar</artifactId>
+        </dependency>
+
+        <dependency>
+            <version>1.1</version>
+            <groupId>org.jdom</groupId>
+            <artifactId>jdom</artifactId>
+        </dependency>
+
+        <dependency>
+            <version>2.6.4</version>
+            <artifactId>jena</artifactId>
+            <groupId>com.hp.hpl.jena</groupId>
+        </dependency>
+
+        <dependency>
+            <version>2.24</version>
+            <groupId>jep</groupId>
+            <artifactId>jep</artifactId>
+        </dependency>
+
+        <dependency>
+            <version>1.7.3</version>
+            <groupId>org.jsoup</groupId>
+            <artifactId>jsoup</artifactId>
+        </dependency>
+
+        <dependency>
+            <version>1.1</version>
+            <groupId>jsr94</groupId>
+            <artifactId>jsr94</artifactId>
+        </dependency>
+
+        <dependency>
+            <version>1.2.12</version>
+            <groupId>log4j</groupId>
+            <artifactId>log4j</artifactId>
+        </dependency>
+
+        <dependency>
+            <version>2.1.0.drools8</version>
+            <groupId>org.mvel</groupId>
+            <artifactId>mvel2</artifactId>
+        </dependency>
+
+        <dependency>
+            <version>8.0.18</version>
+            <groupId>mysql</groupId>
+            <artifactId>mysql-connector-java</artifactId>
+        </dependency>
+
+        <dependency>
+            <version>12.1.0.2</version>
+            <groupId>com.oracle</groupId>
+            <artifactId>ojdbc7</artifactId>
+        </dependency>
+
+        <dependency>
+            <version>9.4-1202-jdbc42</version>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>com.microsoft.sqlserver</groupId>
+            <artifactId>sqljdbc</artifactId>
+            <version>4.1.5605</version>
+        </dependency>
+
+        <dependency>
+            <version>3.7.1</version>
+            <groupId>org.eclipse.jdt</groupId>
+            <artifactId>org.eclipse.jdt.core</artifactId>
+        </dependency>
+
+        <dependency>
+            <version>1.0-2</version>
+            <groupId>javax.xml.stream</groupId>
+            <artifactId>stax-api</artifactId>
+        </dependency>
+
+        <dependency>
+            <version>1.0</version>
+            <groupId>org.swinglabs</groupId>
+            <artifactId>swingx</artifactId>
+        </dependency>
+
+        <dependency>
+            <version>1.5.8</version>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+        </dependency>
+
+        <dependency>
+            <version>1.5.8</version>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-log4j12</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>xerces</groupId>
+            <artifactId>xercesImpl</artifactId>
+            <version>2.7.1</version>
+        </dependency>
+
+        <dependency>
+            <groupId>xml-apis</groupId>
+            <artifactId>xml-apis</artifactId>
+            <version>1.4.01</version>
+        </dependency>
+
+        <!-- Provided -->
+        <dependency>
+            <groupId>javax</groupId>
+            <artifactId>javaee-api</artifactId>
+            <version>7.0</version>
+            <scope>provided</scope>
+        </dependency>
+
+
+        <!-- Local  -->
+
+        <dependency>
+            <version>0.0.1</version>
+            <artifactId>orphanNodesAlg</artifactId>
+            <groupId>orphanNodesAlg</groupId>
+        </dependency>
+
+        <dependency>
+            <version>0.0.1</version>
+            <artifactId>swrl-api</artifactId>
+            <groupId>org.protege</groupId>
+        </dependency>
+
+        <dependency>
+            <version>0.0.1</version>
+            <artifactId>swrl-drools-bridge</artifactId>
+            <groupId>org.protege</groupId>
+        </dependency>
+
+        <dependency>
+            <version>0.0.1</version>
+            <artifactId>swrl-jess-bridge</artifactId>
+            <groupId>org.protege</groupId>
+        </dependency>
+
+        <dependency>
+            <version>0.0.1</version>
+            <artifactId>swrl-tab-p3</artifactId>
+            <groupId>org.protege</groupId>
+        </dependency>
+
+        <dependency>
+            <version>0.0.1</version>
+            <artifactId>swrlbuilt</artifactId>
+            <groupId>swrlbuilt</groupId>
+        </dependency>
+
+        <dependency>
+            <version>0.0.1</version>
+            <artifactId>protege</artifactId>
+            <groupId>protege</groupId>
+        </dependency>
+
+        <dependency>
+            <version>0.0.1</version>
+            <artifactId>protege-owl</artifactId>
+            <groupId>protege</groupId>
+        </dependency>
+
+        <dependency>
+            <version>0.0.1</version>
+            <artifactId>owl-portability</artifactId>
+            <groupId>owl-portability</groupId>
+        </dependency>
+
+        <dependency>
+            <version>0.0.1</version>
+            <artifactId>owl-portability-p3</artifactId>
+            <groupId>owl-portability</groupId>
+        </dependency>
+
+        <dependency>
+            <version>0.0.1</version>
+            <artifactId>owl-syntax</artifactId>
+            <groupId>owl-syntax</groupId>
+        </dependency>
+
+        <dependency>
+            <version>0.0.1</version>
+            <artifactId>jena-dig</artifactId>
+            <groupId>com.hp.hpl.jena</groupId>
+        </dependency>
+
+        <dependency>
+            <version>0.0.1</version>
+            <artifactId>jess</artifactId>
+            <groupId>jess</groupId>
+        </dependency>
+
+        <dependency>
+            <version>0.0.1</version>
+            <artifactId>kazuki</artifactId>
+            <groupId>kazuki</groupId>
+        </dependency>
+
+        <dependency>
+            <version>0.0.1</version>
+            <groupId>ekitspell</groupId>
+            <artifactId>ekitspell</artifactId>
+        </dependency>
+
+        <!-- Tests  -->
+
+        <dependency>
+            <version>1.3</version>
+            <groupId>org.hamcrest</groupId>
+            <artifactId>hamcrest-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <version>4.12</version>
+            <groupId>junit</groupId>
+            <artifactId>junit</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+    </dependencies>
+
+    <repositories>
+        <repository>
+            <id>central</id>
+            <name>Central Repository</name>
+            <url>https://repo.maven.apache.org/maven2</url>
+            <layout>default</layout>
+            <snapshots>
+                <enabled>false</enabled>
+            </snapshots>
+        </repository>
+        <repository>
+            <id>local-libs</id>
+            <url>file://${project.basedir}/libraries</url>
+        </repository>
+        <repository>
+            <id>ida</id>
+            <name>IDA</name>
+            <url>http://ida.fel.cvut.cz/maven/</url>
+        </repository>
+        <repository>
+            <id>wso2</id>
+            <name>WSO2</name>
+            <url>https://dist.wso2.org/maven2/</url>
+        </repository>
+        <repository>
+            <id>hand-china</id>
+            <name>HandChine</name>
+            <url>http://nexus.saas.hand-china.com/content/repositories/rdc/</url>
+        </repository>
+    </repositories>
+
+    <build>
+        <finalName>outertuning</finalName>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.tomcat.maven</groupId>
+                <artifactId>tomcat7-maven-plugin</artifactId>
+                <version>2.2</version>
+                <configuration>
+                    <port>8080</port>
+                    <path>/OuterTuning</path>
+                    <contextReloadable>true</contextReloadable>
+                    <addContextWarDependencies>true</addContextWarDependencies>
+                    <addWarDependenciesInClassloader>true</addWarDependenciesInClassloader>
+                    <warSourceDirectory>${project.build.directory}/${project.build.finalName}/</warSourceDirectory>
+                </configuration>
+            </plugin>
+        </plugins>
+
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>true</filtering>
+            </resource>
+        </resources>
+    </build>
+
+    <profiles>
+        <profile>
+            <id>local</id>
+            <activation>
+                <activeByDefault>true</activeByDefault>
+            </activation>
+            <properties>
+                <database.file>localhost.mysql.mysql_tpch_1gb.properties</database.file>
+            </properties>
+        </profile>
+        <profile>
+            <id>docker</id>
+            <properties>
+                <database.file>docker.mysql.mysql_tpch_1gb.properties</database.file>
+            </properties>
+        </profile>
+        <profile>
+            <id>docker-postgres</id>
+            <properties>
+                <database.file>docker.postgres.pg_tpch_1gb.properties</database.file>
+            </properties>
+        </profile>
+        <profile>
+            <id>docker-postgres-tpcc</id>
+            <properties>
+                <database.file>docker.postgres.pg_tpcc_1gb.properties</database.file>
+            </properties>
+        </profile>
+    </profiles>
+
+</project>
